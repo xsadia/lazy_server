@@ -34,6 +34,10 @@ enum InfoType {
     Unsupported,
 }
 
+/*
+    Payload format:
+    - 3 bytes of headers: content type (OperaGx and OS to start with)
+*/
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {
@@ -74,19 +78,21 @@ impl From<u8> for ContentType {
     }
 }
 
-fn hex_to_string(buf: Vec<u8>) -> String {
-    String::from_utf8(buf).unwrap()
-}
-
 fn shut_down_computer(delay: Option<i32>) {
     let shut_down_delay = match delay {
         Some(delay) => delay,
-        None => 0,
+        None => 1,
     };
     Command::new("shutdown")
         .arg("/s") // /s option for shutdown
         .arg("/t") // /t option to specify the time delay (in seconds)
-        .arg(shut_down_delay.to_string());
+        .arg(shut_down_delay.to_string())
+        .status()
+        .unwrap();
+}
+
+fn spawn_process() {
+    Command::new("").spawn().unwrap();
 }
 
 fn kill_process() {
@@ -103,11 +109,10 @@ fn read_request(mut stream: &TcpStream) -> Result<Request, &'static str> {
     stream.read(buf).unwrap();
     let headers = &buf[..3];
     let content_length = headers[2];
-    let payload = buf[headers.len()..headers.len() + content_length as usize]
-        .into_iter()
-        .map(|&byte| hex_to_string(vec![byte]))
-        .collect::<Vec<String>>()
-        .join("");
+    let payload_bytes: Vec<u8> =
+        Vec::from(&buf[headers.len()..headers.len() + content_length as usize]);
+
+    let payload = String::from_utf8(payload_bytes).unwrap();
 
     Ok(Request {
         payload,
@@ -117,16 +122,18 @@ fn read_request(mut stream: &TcpStream) -> Result<Request, &'static str> {
     })
 }
 
-fn do_smt(request: &Request) {
-    let payload_type = PayloadType::from(request);
-    match (&request.content_type, payload_type) {
+fn execute_request(request: &Request) {
+    match (&request.content_type, PayloadType::from(request)) {
         (ContentType::OperaGx, PayloadType::ShutDown) => kill_process(),
+        (ContentType::OperaGx, PayloadType::Open) => spawn_process(),
+        (ContentType::OS, PayloadType::ShutDown) => shut_down_computer(None),
         _ => panic!(),
     }
 }
 
 fn main() {
     let listener = TcpListener::bind("0.0.0.0:6969").unwrap();
+    println!("Server running");
 
     for stream in listener.incoming() {
         match stream {
@@ -134,12 +141,8 @@ fn main() {
                 Ok(request) => {
                     println!("{:?}", serde_json::to_string(&request).unwrap());
 
-                    // do_smt(&request);
-                    Command::new(
-                        "C:\\Users\\xsadia\\AppData\\Local\\Programs\\Opera GX\\launcher.exe",
-                    )
-                    .spawn()
-                    .unwrap();
+                    execute_request(&request);
+
                     stream
                         .write_all(serde_json::to_string(&request).unwrap().as_bytes())
                         .unwrap();
